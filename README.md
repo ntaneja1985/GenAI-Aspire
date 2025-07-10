@@ -1486,3 +1486,272 @@ namespace Basket.EventHandlers
 - ![alt text](image-120.png)
 
 ## Secure Basket with Keycloak Authentication orchestrate .Net Aspire
+- ![alt text](image-121.png)
+- ![alt text](image-122.png)
+- We will setup Keycloak into .NET Aspire for Identity Provider
+- We will create Realm(Tenants), User and Client for OpenID Connect with Keycloak Identity
+- We will use JwtBearer token for OpenIdConnect with Keycloak Identity
+- We will get current user from token
+- ![alt text](image-123.png)
+- ![alt text](image-124.png)
+
+### Keycloak Hosting Integration in .Net Aspire
+- ![alt text](image-125.png)
+- We will setup the keycloak container
+- Add the Aspire.Hosting.Keycloak pre-release package in AppHost project
+- Add the following code in Program.cs
+```c#
+var builder = DistributedApplication.CreateBuilder(args);
+
+//Backing Services
+var postgres = builder
+    .AddPostgres("postgres")
+    .WithPgAdmin()
+    .WithDataVolume()
+    .WithLifetime(ContainerLifetime.Persistent);
+
+var catalogDb = postgres.AddDatabase("catalogdb");
+
+
+var cache = builder
+    .AddRedis("cache")
+    .WithRedisInsight() //Used for monitoring and visualizing Redis data
+    .WithDataVolume()
+    .WithLifetime(ContainerLifetime.Persistent);
+
+
+
+var rabbitMq = builder
+    .AddRabbitMQ("rabbitmq")
+    .WithManagementPlugin() //Enables the RabbitMQ management plugin for monitoring and management
+    .WithDataVolume()
+    .WithLifetime(ContainerLifetime.Persistent);
+
+var keycloak = builder
+    .AddKeycloak("keycloak", 8080)
+    .WithDataVolume() //Persist Keycloak data across restarts
+    .WithLifetime(ContainerLifetime.Persistent);
+    //.WithAdminUser("admin", "admin") //Default admin user credentials
+    //.WithRealm("master") //Default realm for Keycloak
+    //.WithRealm("catalog"); //Custom realm for the catalog service
+
+//Projects
+var catalog = builder
+    .AddProject<Projects.Catalog>("catalog")
+    .WithReference(catalogDb)
+    .WithReference(rabbitMq)
+    .WaitFor(catalogDb)
+    .WaitFor(rabbitMq);
+
+
+var basket = builder
+    .AddProject<Projects.Basket>("basket")
+    .WithReference(cache)
+    .WithReference(catalog)
+    .WithReference(rabbitMq)
+    .WithReference(keycloak)
+    .WaitFor(cache)
+    .WaitFor(rabbitMq)
+    .WaitFor(keycloak);
+
+
+builder.Build().Run();
+
+```
+- Once the project is up and running, we can login to Keycloak management console:
+- ![alt text](image-126.png)
+- ![alt text](image-127.png)
+
+### Creating Realm, User and Client for OpenIdConnect with Keycloak Identity Provider
+- ![alt text](image-128.png)
+- ![alt text](image-129.png)
+- ![alt text](image-130.png)
+- ![alt text](image-131.png)
+- ![alt text](image-132.png)
+- ![alt text](image-133.png)
+- We can get the token using the endpoint for keycloak
+- We will send the following request from Basket.http
+```shell
+POST http://localhost:8080/realms/eshop/protocol/openid-connect/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=password&client_id=eshop-client&scope=email openid&username=test&password=p@ssw0rd
+
+```
+- This will give us an access token
+- ![alt text](image-134.png)
+- We will add the Aspire.Keycloak.Authentication library to Basket Microservice
+```xml
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Catalog\Models\Product.cs" Link="Models\Product.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Keycloak.Authentication" Version="9.3.1-preview.1.25305.6" />
+    <PackageReference Include="Aspire.StackExchange.Redis.DistributedCaching" Version="9.3.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ServiceDefaults\ServiceDefaults.csproj" />
+  </ItemGroup>
+
+</Project>
+
+```
+- Now we need to register keycloak authentication in Basket Microservice's Program.cs file
+```c#
+
+using ServiceDefaults.Messaging;
+using System.Reflection;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services to the container.
+
+builder.AddServiceDefaults();
+builder.AddRedisDistributedCache(connectionName: "cache");
+builder.Services.AddScoped<BasketService>();
+
+
+//Register the HttpClient
+builder.Services.AddHttpClient<CatalogApiClient>(client =>
+{
+    client.BaseAddress = new Uri("https+http://catalog");
+});
+
+//Scan the current assembly for consumers, sagas, and state machines and register them with MassTransit
+builder.Services.AddMassTransitWithAssemblies(Assembly.GetExecutingAssembly());
+
+builder.Services.AddAuthentication()
+    .AddKeycloakJwtBearer(
+    serviceName: "keycloak",
+    realm: "eshop", // The realm for the basket service
+    configureOptions: options =>
+    {
+        options.RequireHttpsMetadata = false; // Set to true in production
+        //options.Authority = "https://keycloak:8080/realms/eshop"; // Keycloak authority URL
+        options.Audience = "account"; // The audience for the basket service
+    });
+
+builder.Services.AddAuthorization();
+
+
+var app = builder.Build();
+
+// Configure the HTTP request pipeline.
+
+app.MapDefaultEndpoints();
+app.MapBasketEndpoints();
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.UseHttpsRedirection();
+
+app.Run();
+
+```
+- Now we will ensure that all methods in BasketEndpoints require authorization. This will be updated as follows:
+```c#
+ public static class BasketEndpoints
+ {
+     public static void MapBasketEndpoints(this IEndpointRouteBuilder app)
+     {
+         var group = app.MapGroup("basket");
+
+         group.MapGet("/{userName}", async (string userName, BasketService basketService) =>
+         {
+             var basket = await basketService.GetBasket(userName);
+             return basket is not null ? Results.Ok(basket) : Results.NotFound();
+         })
+         .WithName("GetBasket")
+         .Produces<ShoppingCart>(StatusCodes.Status200OK)
+         .Produces(StatusCodes.Status404NotFound)
+         .RequireAuthorization(); // Ensure the user is authenticated
+
+         group.MapPost("/", async (ShoppingCart basket, BasketService basketService) =>
+         {
+             await basketService.UpdateBasket(basket);
+             return Results.Created("GetBasket", basket);
+         })
+         .WithName("UpdateBasket")
+         .Produces<ShoppingCart>(StatusCodes.Status201Created)
+         .RequireAuthorization(); // Ensure the user is authenticated
+
+
+         group.MapDelete("/{userName}", async (string userName, BasketService basketService) =>
+         {
+             await basketService.DeleteBasket(userName);
+             return Results.NoContent();
+         })
+         .WithName("DeleteBasket")
+         .Produces<ShoppingCart>(StatusCodes.Status204NoContent)
+         .RequireAuthorization(); // Ensure the user is authenticated
+     }
+ }
+
+```
+- ![alt text](image-135.png)
+- We will modify the Basket.http file to include the Authorization header with the Bearer token as follows:
+```shell
+@Basket_HostAddress = https://localhost:7282/basket
+@accessToken = eyJhbGciOiJSUzI1Ni...
+
+GET {{Basket_HostAddress}}/swn1
+Accept: application/json
+Authorization: Bearer {{accessToken}}
+
+###
+
+POST {{Basket_HostAddress}}
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+
+{
+  "UserName": "swn1",
+  "Items": [
+    {
+      "Quantity": 2,
+      "Color": "Red",
+      "Price": 0,
+      "ProductId": "1",
+      "ProductName": "Solar powered Flashlight"
+    },
+    {
+      "Quantity": 1,
+      "Color": "Blue",
+      "Price":0,
+      "ProductId": "2",
+      "ProductName": "Hiking Poles"
+    }
+  ]
+}
+
+###
+
+DELETE {{Basket_HostAddress}}/swn
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+
+###
+
+POST http://localhost:8080/realms/eshop/protocol/openid-connect/token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=password&client_id=eshop-client&scope=email openid&username=test&password=p@ssw0rd
+```
+
+- Now if we send the request will a random access token we will get 401 unauthorized
+- ![alt text](image-136.png)
+- If we specify the correct access token, we get response as follows:
+- ![alt text](image-137.png)

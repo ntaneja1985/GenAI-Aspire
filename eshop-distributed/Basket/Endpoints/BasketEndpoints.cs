@@ -13,7 +13,8 @@
             })
             .WithName("GetBasket")
             .Produces<ShoppingCart>(StatusCodes.Status200OK)
-            .Produces(StatusCodes.Status404NotFound);
+            .Produces(StatusCodes.Status404NotFound)
+            .RequireAuthorization(); // Ensure the user is authenticated
 
             group.MapPost("/", async (ShoppingCart basket, BasketService basketService) =>
             {
@@ -21,7 +22,8 @@
                 return Results.Created("GetBasket", basket);
             })
             .WithName("UpdateBasket")
-            .Produces<ShoppingCart>(StatusCodes.Status201Created);
+            .Produces<ShoppingCart>(StatusCodes.Status201Created)
+            .RequireAuthorization(); // Ensure the user is authenticated
 
 
             group.MapDelete("/{userName}", async (string userName, BasketService basketService) =>
@@ -30,7 +32,8 @@
                 return Results.NoContent();
             })
             .WithName("DeleteBasket")
-            .Produces<ShoppingCart>(StatusCodes.Status204NoContent);
+            .Produces<ShoppingCart>(StatusCodes.Status204NoContent)
+            .RequireAuthorization(); // Ensure the user is authenticated
         }
     }
 }

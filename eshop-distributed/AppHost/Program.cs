@@ -24,6 +24,14 @@ var rabbitMq = builder
     .WithDataVolume()
     .WithLifetime(ContainerLifetime.Persistent);
 
+var keycloak = builder
+    .AddKeycloak("keycloak", 8080)
+    .WithDataVolume() //Persist Keycloak data across restarts
+    .WithLifetime(ContainerLifetime.Persistent);
+    //.WithAdminUser("admin", "admin") //Default admin user credentials
+    //.WithRealm("master") //Default realm for Keycloak
+    //.WithRealm("catalog"); //Custom realm for the catalog service
+
 //Projects
 var catalog = builder
     .AddProject<Projects.Catalog>("catalog")
@@ -38,8 +46,10 @@ var basket = builder
     .WithReference(cache)
     .WithReference(catalog)
     .WithReference(rabbitMq)
+    .WithReference(keycloak)
     .WaitFor(cache)
-    .WaitFor(rabbitMq);
+    .WaitFor(rabbitMq)
+    .WaitFor(keycloak);
 
 
 builder.Build().Run();
