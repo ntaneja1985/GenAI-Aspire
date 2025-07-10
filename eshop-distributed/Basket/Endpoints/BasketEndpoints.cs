@@ -6,7 +6,7 @@
         {
             var group = app.MapGroup("basket");
 
-            app.MapGet("/{userName}", async (string userName, BasketService basketService) =>
+            group.MapGet("/{userName}", async (string userName, BasketService basketService) =>
             {
                 var basket = await basketService.GetBasket(userName);
                 return basket is not null ? Results.Ok(basket) : Results.NotFound();
@@ -15,7 +15,7 @@
             .Produces<ShoppingCart>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status404NotFound);
 
-            app.MapPost("/", async (Basket.Models.ShoppingCart basket, BasketService basketService) =>
+            group.MapPost("/", async (ShoppingCart basket, BasketService basketService) =>
             {
                 await basketService.UpdateBasket(basket);
                 return Results.Created("GetBasket", basket);
@@ -24,7 +24,7 @@
             .Produces<ShoppingCart>(StatusCodes.Status201Created);
 
 
-            app.MapDelete("/{userName}", async (string userName, BasketService basketService) =>
+            group.MapDelete("/{userName}", async (string userName, BasketService basketService) =>
             {
                 await basketService.DeleteBasket(userName);
                 return Results.NoContent();

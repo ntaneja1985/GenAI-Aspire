@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Basket.Services
 {
-    public class BasketService(IDistributedCache cache)
+    public class BasketService(IDistributedCache cache, CatalogApiClient catalogApiClient)
     {
         public async Task<ShoppingCart?> GetBasket(string userName)
         {
@@ -18,6 +18,20 @@ namespace Basket.Services
 
         public async Task UpdateBasket(ShoppingCart basket)
         {
+            //Before updating the shopping cart, call the Catalog Microservice's GetProductByIdAsync method
+            //Get latest product information and set the Price and ProductName when adding/updating the item into the Shopping Cart
+
+            foreach (var item in basket.Items)
+            {
+                var product = await catalogApiClient.GetProductByIdAsync(int.Parse(item.ProductId));
+                if (product != null)
+                {
+                    item.Price = product.Price;
+                    item.ProductName = product.Name;
+                }
+            }
+
+
             await cache.SetStringAsync(basket.UserName, JsonSerializer.Serialize(basket),
                 new DistributedCacheEntryOptions
                 {

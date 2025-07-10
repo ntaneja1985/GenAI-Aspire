@@ -1015,3 +1015,431 @@ Content-Type: application/json
 - ![alt text](image-91.png)
 
 ## Sync Communication between Catalog-Basket with .NET Aspire Service Discovery
+- ![alt text](image-92.png)
+- We can use WithReference keyword to setup communication between microservices
+- ![alt text](image-93.png)
+- Basically, when we update the Basket, we need the latest Product Prices
+- ![alt text](image-95.png)
+- ![alt text](image-96.png)
+- So we will first update Program.cs file in AppHost Project
+```c#
+//Projects
+var catalog = builder
+    .AddProject<Projects.Catalog>("catalog")
+    .WithReference(catalogDb)
+    .WaitFor(catalogDb);
+
+
+var basket = builder
+    .AddProject<Projects.Basket>("basket")
+    .WithReference(cache)
+    .WithReference(catalog) //Add reference to catalog microservice
+    .WaitFor(cache);
+
+```
+- Then we can see that references to catalog microservice are injected in the basket microservice
+- ![alt text](image-97.png)
+- ![alt text](image-98.png)
+- Now we need to add a CatalogApiClient to the BasketMicroservice which fetch the latest price for a Product
+```c#
+using Catalog.Models;
+
+namespace Basket.ApiClients
+{
+    public class CatalogApiClient(HttpClient httpClient)
+    {
+        public async Task<Product> GetProductByIdAsync(int id)
+        {
+            var response = await httpClient.GetFromJsonAsync<Product>($"/products/{id}");
+            return response ?? throw new Exception($"Product with id {id} not found.");
+        }
+    }
+}
+
+
+```
+- ![alt text](image-99.png)
+- Then we also need to register this HttpClient in the Program.cs file of Basket microservice
+```c#
+builder.Services.AddHttpClient<CatalogApiClient>(client =>
+{
+    client.BaseAddress = new Uri("https+http://catalog");
+});
+```
+- ![alt text](image-101.png)
+- Now we can update BasketService as follows:
+
+```c#
+
+using Microsoft.Extensions.Caching.Distributed;
+using System.Text.Json;
+
+namespace Basket.Services
+{
+    public class BasketService(IDistributedCache cache, CatalogApiClient catalogApiClient)
+    {
+        public async Task<ShoppingCart?> GetBasket(string userName)
+        {
+            if (string.IsNullOrEmpty(userName))
+            {
+                throw new ArgumentException("User name cannot be null or empty.", nameof(userName));
+            }
+            var basket = await cache.GetStringAsync(userName);
+            return string.IsNullOrEmpty(basket) ? null : JsonSerializer.Deserialize<ShoppingCart>(basket);
+        }
+
+        public async Task UpdateBasket(ShoppingCart basket)
+        {
+            //Before updating the shopping cart, call the Catalog Microservice's GetProductByIdAsync method
+            //Get latest product information and set the Price and ProductName when adding/updating the item into the Shopping Cart
+
+            foreach (var item in basket.Items)
+            {
+                var product = await catalogApiClient.GetProductByIdAsync(int.Parse(item.ProductId));
+                if (product != null)
+                {
+                    item.Price = product.Price;
+                    item.ProductName = product.Name;
+                }
+            }
+
+
+            await cache.SetStringAsync(basket.UserName, JsonSerializer.Serialize(basket),
+                new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromDays(30)
+                });
+        }
+
+        public async Task DeleteBasket(string userName)
+        {
+            if (string.IsNullOrEmpty(userName))
+            {
+                throw new ArgumentException("User name cannot be null or empty.", nameof(userName));
+            }
+            await cache.RemoveAsync(userName);
+
+        }
+    }
+}
+
+
+```
+- Now we can test this out as follows. Notice, that from the Basket, we are setting the price as 0 , but when the response comes, it has the price set to 9.99 and 19.99 for products with Id 1 and 2 respectively. This is because of synchronous communication between microservices
+- ![alt text](image-102.png)
+
+## Async Communication between Microservices with RabbitMq/MassTransit orchestrated with .NET Aspire
+- ![alt text](image-103.png)
+- ![alt text](image-104.png)
+- ![alt text](image-105.png)
+- ![alt text](image-106.png)
+- ![alt text](image-107.png)
+- A domain event ProductPriceChanged Event will lead to integration event: ProductPriceChanged Integration Event
+- ![alt text](image-108.png)
+- ![alt text](image-109.png)
+- ![alt text](image-110.png)
+
+### RabbitMq Hosting Integration in .NET Aspire
+- We will first add the RabbitMq Aspire package in AppHost project
+-  Modify the Program.cs file of AppHost as follows:
+```c#
+var rabbitMq = builder
+    .AddRabbitMQ("rabbitmq")
+    .WithManagementPlugin() //Enables the RabbitMQ management plugin for monitoring and management
+    .WithDataVolume()
+    .WithLifetime(ContainerLifetime.Persistent);
+
+//Projects
+var catalog = builder
+    .AddProject<Projects.Catalog>("catalog")
+    .WithReference(catalogDb)
+    .WithReference(rabbitMq)
+    .WaitFor(catalogDb)
+    .WaitFor(rabbitMq);
+
+
+var basket = builder
+    .AddProject<Projects.Basket>("basket")
+    .WithReference(cache)
+    .WithReference(catalog)
+    .WithReference(rabbitMq)
+    .WaitFor(cache)
+    .WaitFor(rabbitMq);
+
+```
+- ![alt text](image-111.png)
+- ![alt text](image-112.png)
+- The environment variables for rabbitMq are automatically added to basket and catalog microservice
+- ![alt text](image-113.png)
+
+### Creating Shared Messaging Folders
+- ![alt text](image-114.png)
+- ![alt text](image-115.png)
+- The following is our Integration Event and ProductPriceChangedIntegration Event Models
+
+```c#
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace ServiceDefaults.Messaging.Events
+{
+    public record IntegrationEvent
+    {
+        public Guid EventId => Guid.NewGuid();
+        public DateTime OccurredOn  => DateTime.UtcNow;
+
+        public string EventType => GetType().AssemblyQualifiedName;
+    }
+}
+
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace ServiceDefaults.Messaging.Events
+{
+    public record ProductPriceChangedIntegrationEvent : IntegrationEvent
+    {
+        public int ProductId { get; set; } = default!;
+        public string Name { get; set; } = default!;
+        public string Description { get; set; } = default!;
+        public decimal Price { get; set; } = default!;
+        public string ImageUrl { get; set; } = default!;
+    }
+}
+
+
+```
+- Next we will setup RabbitMq using MassTransit by adding a MassTransitExtensions class in the ServiceDefaults Project as follows:
+
+```c#
+using MassTransit;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using System.Reflection;
+
+namespace ServiceDefaults.Messaging
+{
+    public static class MassTransitExtensions
+    {
+        public static IServiceCollection AddMassTransitWithAssemblies(this IServiceCollection services, params Assembly[] assemblies)
+        {
+            services.AddMassTransit(config =>
+            {
+                // Configure MassTransit with RabbitMQ
+                config.SetKebabCaseEndpointNameFormatter();
+
+                // Use in-memory saga repository
+                config.SetInMemorySagaRepositoryProvider();
+
+                // Register the consumers
+                config.AddConsumers(assemblies);
+
+                // Register the saga state machines
+                config.AddSagaStateMachines(assemblies);
+
+                // Register the sagas
+                config.AddSagas(assemblies);
+
+                // Register the activities
+                config.AddActivities(assemblies);
+
+                config.UsingRabbitMq((context, cfg) =>
+                {
+                    var configuration = context.GetRequiredService<IConfiguration>();
+                    // Get the RabbitMQ connection string from environment variables of the microservice
+                    var connectionString = configuration.GetConnectionString("rabbitmq");
+                    cfg.Host(connectionString);
+                    cfg.ConfigureEndpoints(context);
+                });
+            });
+            // Register the event handlers
+            //services.AddScoped<ProductPriceChangedIntegrationEventHandler>();
+            return services;
+        }
+    }
+}
+
+```
+### Register MassTransit Packages in Catalog and Basket DI in Program.cs file
+- ![alt text](image-116.png)
+- We will call the AddMassTransit extension method in Basket and Catalog Microservices
+- We will go to Program.cs file of each microservice and add the following code:
+```c#
+//Scan the current assembly for consumers, sagas, and state machines and register them with MassTransit
+builder.Services.AddMassTransitWithAssemblies(Assembly.GetExecutingAssembly());
+```
+
+### Add .Net Aspire Trace for MassTransit Operations
+- We will add telemetry for MassTransit
+- Add it in Extensions class of ServiceDefaults project
+- This will allow us to see trace logs for MassTransit operations
+```c#
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.ServiceDiscovery;
+using OpenTelemetry;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
+
+namespace Microsoft.Extensions.Hosting
+{
+    // Adds common .NET Aspire services: service discovery, resilience, health checks, and OpenTelemetry.
+    // This project should be referenced by each service project in your solution.
+    // To learn more about using this project, see https://aka.ms/dotnet/aspire/service-defaults
+    public static class Extensions
+    {
+        public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
+        {
+            builder.ConfigureOpenTelemetry();
+
+            builder.AddDefaultHealthChecks();
+
+            builder.Services.AddServiceDiscovery();
+
+            builder.Services.ConfigureHttpClientDefaults(http =>
+            {
+                // Turn on resilience by default
+                http.AddStandardResilienceHandler();
+
+                // Turn on service discovery by default
+                http.AddServiceDiscovery();
+            });
+
+            // Uncomment the following to restrict the allowed schemes for service discovery.
+            // builder.Services.Configure<ServiceDiscoveryOptions>(options =>
+            // {
+            //     options.AllowedSchemes = ["https"];
+            // });
+
+            return builder;
+        }
+
+        public static TBuilder ConfigureOpenTelemetry<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
+        {
+            builder.Logging.AddOpenTelemetry(logging =>
+            {
+                logging.IncludeFormattedMessage = true;
+                logging.IncludeScopes = true;
+            });
+
+            builder.Services.AddOpenTelemetry()
+                .WithMetrics(metrics =>
+                {
+                    metrics.AddAspNetCoreInstrumentation()
+                        .AddHttpClientInstrumentation()
+                        .AddRuntimeInstrumentation();
+                })
+                .WithTracing(tracing =>
+                {
+                    tracing.AddSource(builder.Environment.ApplicationName)
+                        .AddAspNetCoreInstrumentation()
+                        // Uncomment the following line to enable gRPC instrumentation (requires the OpenTelemetry.Instrumentation.GrpcNetClient package)
+                        //.AddGrpcClientInstrumentation()
+                        .AddHttpClientInstrumentation()
+                        //Add tracing for MassTransit
+                        .AddSource("MassTransit");
+                });
+
+            builder.AddOpenTelemetryExporters();
+
+            return builder;
+        }
+
+        private static TBuilder AddOpenTelemetryExporters<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
+        {
+            var useOtlpExporter = !string.IsNullOrWhiteSpace(builder.Configuration["OTEL_EXPORTER_OTLP_ENDPOINT"]);
+
+            if (useOtlpExporter)
+            {
+                builder.Services.AddOpenTelemetry().UseOtlpExporter();
+            }
+
+            // Uncomment the following lines to enable the Azure Monitor exporter (requires the Azure.Monitor.OpenTelemetry.AspNetCore package)
+            //if (!string.IsNullOrEmpty(builder.Configuration["APPLICATIONINSIGHTS_CONNECTION_STRING"]))
+            //{
+            //    builder.Services.AddOpenTelemetry()
+            //       .UseAzureMonitor();
+            //}
+
+            return builder;
+        }
+
+        public static TBuilder AddDefaultHealthChecks<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
+        {
+            builder.Services.AddHealthChecks()
+                // Add a default liveness check to ensure app is responsive
+                .AddCheck("self", () => HealthCheckResult.Healthy(), ["live"]);
+
+            return builder;
+        }
+
+        public static WebApplication MapDefaultEndpoints(this WebApplication app)
+        {
+            // Adding health checks endpoints to applications in non-development environments has security implications.
+            // See https://aka.ms/dotnet/aspire/healthchecks for details before enabling these endpoints in non-development environments.
+            if (app.Environment.IsDevelopment())
+            {
+                // All health checks must pass for app to be considered ready to accept traffic after starting
+                app.MapHealthChecks("/health");
+
+                // Only health checks tagged with the "live" tag must pass for app to be considered alive
+                app.MapHealthChecks("/alive", new HealthCheckOptions
+                {
+                    Predicate = r => r.Tags.Contains("live")
+                });
+            }
+
+            return app;
+        }
+    }
+}
+
+```
+
+### Catalog Microservice Publish ProductPriceChanged Integration Event
+- ![alt text](image-117.png)
+- Inject the IBus interface in ProductService class and update the code for update product method
+```c#
+public async Task UpdateProductAsync(Product updatedProduct, Product inputProduct)
+{
+    // if price has changed, raise ProductPriceChanged Integration Event
+    if (updatedProduct.Price != inputProduct.Price)
+    {
+        //Publish product price changed integration event for update basket prices
+        var integrationEvent = new ProductPriceChangedIntegrationEvent
+        {
+            ProductId = updatedProduct.Id,
+            Name = inputProduct.Name,
+            Description = inputProduct.Description,
+            Price = inputProduct.Price, //set updated price
+            ImageUrl = inputProduct.ImageUrl
+        };
+
+        await bus.Publish(integrationEvent);
+
+    }
+
+    //update product with new values
+    updatedProduct.Name = inputProduct.Name;
+    updatedProduct.Description = inputProduct.Description;
+    updatedProduct.Price = inputProduct.Price;
+    updatedProduct.ImageUrl = inputProduct.ImageUrl;
+
+    dbContext.Products.Update(updatedProduct);
+    await dbContext.SaveChangesAsync();
+}
+
+```
+- However we can face dual write problem in the above setup, what if the event is published but the database save operation failed ? 
+- Conversely what if the event is not published correctly
+- To solve this we can use Outbox pattern or Saga Pattern to ensure these write operations are atomic. 

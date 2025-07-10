@@ -1,3 +1,7 @@
+
+using ServiceDefaults.Messaging;
+using System.Reflection;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
@@ -5,6 +9,16 @@ var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 builder.AddRedisDistributedCache(connectionName: "cache");
 builder.Services.AddScoped<BasketService>();
+
+
+//Register the HttpClient
+builder.Services.AddHttpClient<CatalogApiClient>(client =>
+{
+    client.BaseAddress = new Uri("https+http://catalog");
+});
+
+//Scan the current assembly for consumers, sagas, and state machines and register them with MassTransit
+builder.Services.AddMassTransitWithAssemblies(Assembly.GetExecutingAssembly());
 
 var app = builder.Build();
 

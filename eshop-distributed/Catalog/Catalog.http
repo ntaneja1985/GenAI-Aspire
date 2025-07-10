@@ -1,4 +1,4 @@
-@Catalog_HostAddress = http://localhost:7234/products
+@Catalog_HostAddress = https://localhost:7050/products
 
 GET {{Catalog_HostAddress}}/
 Accept: application/json
@@ -24,6 +24,7 @@ Content-Type: application/json
 PUT {{Catalog_HostAddress}}/11
 Content-Type: application/json
 {
+  "id": 11,
   "name": "Updated New Product",
   "description": "This is an updated product.",
   "price": 24.99,

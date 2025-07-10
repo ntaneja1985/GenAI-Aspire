@@ -32,7 +32,7 @@
             .Produces<Product>(StatusCodes.Status201Created); 
 
 
-            app.MapPut("/{id}", async (int id, Product inputProduct, ProductService productService) =>
+            group.MapPut("/{id}", async (int id, Product inputProduct, ProductService productService) =>
             {
                 if (id != inputProduct.Id)
                 {
@@ -48,7 +48,7 @@
             ; 
 
 
-            app.MapDelete("/{id}", async (int id, ProductService productService) =>
+            group.MapDelete("/{id}", async (int id, ProductService productService) =>
             {
                 await productService.DeleteProductAsync(id);
                 return Results.NoContent();

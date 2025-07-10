@@ -62,7 +62,9 @@ namespace Microsoft.Extensions.Hosting
                         .AddAspNetCoreInstrumentation()
                         // Uncomment the following line to enable gRPC instrumentation (requires the OpenTelemetry.Instrumentation.GrpcNetClient package)
                         //.AddGrpcClientInstrumentation()
-                        .AddHttpClientInstrumentation();
+                        .AddHttpClientInstrumentation()
+                        //Add tracing for MassTransit
+                        .AddSource("MassTransit");
                 });
 
             builder.AddOpenTelemetryExporters();
