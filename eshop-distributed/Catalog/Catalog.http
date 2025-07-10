@@ -21,10 +21,10 @@ Content-Type: application/json
 }
 
 ###
-PUT {{Catalog_HostAddress}}/11
+PUT {{Catalog_HostAddress}}/2
 Content-Type: application/json
 {
-  "id": 11,
+  "id": 2,
   "name": "Updated New Product",
   "description": "This is an updated product.",
   "price": 24.99,

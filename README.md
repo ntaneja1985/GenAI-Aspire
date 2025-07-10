@@ -1443,3 +1443,46 @@ public async Task UpdateProductAsync(Product updatedProduct, Product inputProduc
 - However we can face dual write problem in the above setup, what if the event is published but the database save operation failed ? 
 - Conversely what if the event is not published correctly
 - To solve this we can use Outbox pattern or Saga Pattern to ensure these write operations are atomic. 
+
+### Basket Subscribe and Consume ProductPriceChanged Integration Event
+- In the Basket Microservice, create a ProductPriceChangedIntegrationEvent handler
+```c#
+using MassTransit;
+using ServiceDefaults.Messaging.Events;
+
+namespace Basket.EventHandlers
+{
+    public class ProductPriceChangedIntegrationEventHandler(BasketService basketService) : IConsumer<ProductPriceChangedIntegrationEvent>
+    {
+        public async Task Consume(ConsumeContext<ProductPriceChangedIntegrationEvent> context)
+        {
+            // find products on basket and update price
+            await basketService.UpdateBasketItemProductPrices(context.Message.ProductId, context.Message.Price);
+        }
+    }
+}
+
+```
+- The code for updateBasketItemProductPrices is as follows:
+```c#
+ internal async Task UpdateBasketItemProductPrices(int productId, decimal price)
+ {
+    //IDistributedCache doesnot support list of keys function
+
+     var basket = await GetBasket("swn1");
+     var item = basket!.Items.FirstOrDefault(x =>x.ProductId==productId.ToString());
+     if (item != null)
+     {
+         item.Price = price;
+         await cache.SetStringAsync(basket.UserName, JsonSerializer.Serialize(basket));
+     }
+ }
+```
+
+- Please note IDistributedCache doesnot support listing of keys
+- I tried to update product prices for all the baskets for all the username keys, but was not able to do so as listing of keys is not supported
+- ![alt text](image-118.png)
+- ![alt text](image-119.png)
+- ![alt text](image-120.png)
+
+## Secure Basket with Keycloak Authentication orchestrate .Net Aspire
