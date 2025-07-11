@@ -1755,3 +1755,320 @@ grant_type=password&client_id=eshop-client&scope=email openid&username=test&pass
 - ![alt text](image-136.png)
 - If we specify the correct access token, we get response as follows:
 - ![alt text](image-137.png)
+
+## Developing the Client Application in Blazor
+- ![alt text](image-138.png)
+- ![alt text](image-139.png)
+- ![alt text](image-140.png)
+- Add the following code to AppHost project's Program.cs file
+```c#
+var webapp = builder
+    .AddProject<Projects.WebApp>("webapp")
+    .WithExternalHttpEndpoints()
+    .WithReference(catalog)
+    .WithReference(basket)
+    .WaitFor(catalog)
+    .WaitFor(basket);
+```
+
+### Integration of WebApp with Catalog Microservice using CatalogApiClient
+- We will add a link to the Product model inside the WebApp
+- We will create a new folder called ApiClients in WebApp and create a new CatalogApiClient.cs file as follows
+```c#
+using Catalog.Models;
+
+namespace WebApp.ApiClients
+{
+    public class CatalogApiClient(HttpClient httpClient)
+    {
+        public async Task<List<Product>> GetProducts()
+        {
+            var response = await httpClient.GetFromJsonAsync<List<Product>>($"/products");
+            return response;
+        }
+
+        public async Task<Product> GetProductById(int id)
+        {
+            var response = await httpClient.GetFromJsonAsync<Product>($"/products/{id}");
+            return response;
+        }
+    }
+}
+
+
+```
+
+### Register CatalogApiClient with Aspire Integrations for Service Discovery
+- ![alt text](image-141.png)
+- We will add the following code to WebApp's Program.cs file
+```c#
+builder.Services.AddHttpClient<CatalogApiClient>(client =>
+{     // Configure the base address for the Catalog API client
+    client.BaseAddress = new Uri("https+http://catalog");
+});
+```
+- Next we will add a Products.razor Page
+```c#
+@page "/products"
+@using Catalog.Models
+@using Microsoft.AspNetCore.OutputCaching
+@using WebApp.ApiClients
+@inject CatalogApiClient CatalogApiClient
+@attribute [StreamRendering(true)]
+@* @attribute [OutputCache(Duration = 5)] *@
+
+<PageTitle>Products</PageTitle>
+
+<h1>Products</h1>
+
+<p>Here are some of our amazing outdoor products that you can purchase.</p>
+
+@if (products == null)
+{
+    <p><em>Loading...</em></p>
+}
+else if (products.Count == 0)
+{
+    <p><em>There is a problem loading our products. Please try again later.</em></p>
+}
+else
+{
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Image</th>
+                <th>Name</th>
+                <th>Description</th>
+                <th>Price</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var product in products)
+            {
+                <tr>
+                    <!-- Simulating images being hosted on a CDN -->
+                    <td><img height="80" width="80" src="https://raw.githubusercontent.com/MicrosoftDocs/mslearn-dotnet-cloudnative/main/dotnet-docker/Products/wwwroot/images/@product.ImageUrl" /></td>
+                    <td>@product.Name</td>
+                    <td>@product.Description</td>
+                    <td>@product.Price.ToString("C2")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<Product>? products;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Simulate asynchronous loading to demonstrate streaming rendering
+        products = await CatalogApiClient.GetProducts();
+    }
+}
+
+```
+- Imports.razor acts like a globalUsings and we can apply these references to all pages
+```c#
+@using System.Net.Http
+@using System.Net.Http.Json
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Routing
+@using Microsoft.AspNetCore.Components.Web
+@using static Microsoft.AspNetCore.Components.Web.RenderMode
+@using Microsoft.AspNetCore.Components.Web.Virtualization
+@using Microsoft.JSInterop
+@using WebApp
+@using WebApp.Components
+@using Catalog.Models
+@using Microsoft.AspNetCore.OutputCaching
+@using WebApp.ApiClients
+
+```
+- We can run the application as follows:
+- ![alt text](image-142.png)
+- ![alt text](image-143.png)
+
+## Output Caching fo Products Page
+- ![alt text](image-144.png)
+- ![alt text](image-145.png)
+- We will add the Aspire Redis Output Caching library to client application i.e WebApp
+- ![alt text](image-146.png)
+- Add Redis output caching in Program.cs file as follows:
+```c#
+using WebApp.ApiClients;
+using WebApp.Components;
+
+var builder = WebApplication.CreateBuilder(args);
+
+
+
+// Add services to the container.
+
+builder.AddServiceDefaults();
+
+builder.Services.AddHttpClient<CatalogApiClient>(client =>
+{     // Configure the base address for the Catalog API client
+    client.BaseAddress = new Uri("https+http://catalog");
+});
+
+//Add output caching
+builder.AddRedisOutputCache("cache");
+
+builder.Services.AddRazorComponents()
+    .AddInteractiveServerComponents();
+
+var app = builder.Build();
+
+// Configure the HTTP request pipeline.
+
+app.MapDefaultEndpoints();
+
+//use output cache
+app.UseOutputCache();
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler("/Error", createScopeForErrors: true);
+    // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
+    app.UseHsts();
+}
+
+app.UseHttpsRedirection();
+
+
+app.UseAntiforgery();
+
+app.MapStaticAssets();
+app.MapRazorComponents<App>()
+    .AddInteractiveServerRenderMode();
+
+app.Run();
+
+```
+- To Products.razor page add the following code:
+```c#
+@attribute [OutputCache(Duration = 5)]
+```
+
+- We can see that if we try to get the Products page within 5 seconds, it will fetch from the cache rather than making a call to the API
+- ![alt text](image-147.png)
+
+## Deploy Project to Azure Container Apps
+- ![alt text](image-148.png)
+- ![alt text](image-149.png)
+- ![alt text](image-150.png)
+- Azure Container Apps in Microsoft's managed container hosting for microservices
+- ![alt text](image-151.png)
+- ![alt text](image-152.png)
+- We can easily to CI/CD pipelines using azd commands
+- ![alt text](image-153.png)
+- ![alt text](image-154.png)
+- Data Volumes dont work in Azure Container Apps
+- We use Data volume to persist data across container restarts
+- ![alt text](image-155.png)
+- ![alt text](image-156.png)
+- ![alt text](image-157.png)
+- We will have to make changes to Program.cs of AppHost project as follows and comment out DataVolumes
+```c#
+var builder = DistributedApplication.CreateBuilder(args);
+
+//Backing Services
+var postgres = builder
+    .AddPostgres("postgres")
+    .WithPgAdmin()
+    //.WithDataVolume()
+    .WithLifetime(ContainerLifetime.Persistent);
+
+
+
+var catalogDb = postgres.AddDatabase("catalogdb");
+
+
+var cache = builder
+    .AddRedis("cache")
+    .WithRedisInsight() //Used for monitoring and visualizing Redis data
+    //.WithDataVolume()
+    .WithLifetime(ContainerLifetime.Persistent);
+
+
+
+var rabbitMq = builder
+    .AddRabbitMQ("rabbitmq")
+    .WithManagementPlugin() //Enables the RabbitMQ management plugin for monitoring and management
+    //.WithDataVolume()
+    .WithLifetime(ContainerLifetime.Persistent);
+
+var keycloak = builder
+    .AddKeycloak("keycloak", 8080)
+    //.WithDataVolume() //Persist Keycloak data across restarts
+    .WithLifetime(ContainerLifetime.Persistent);
+    //.WithAdminUser("admin", "admin") //Default admin user credentials
+    //.WithRealm("master") //Default realm for Keycloak
+    //.WithRealm("catalog"); //Custom realm for the catalog service
+
+//Projects
+var catalog = builder
+    .AddProject<Projects.Catalog>("catalog")
+    .WithReference(catalogDb)
+    .WithReference(rabbitMq)
+    .WaitFor(catalogDb)
+    .WaitFor(rabbitMq);
+
+
+var basket = builder
+    .AddProject<Projects.Basket>("basket")
+    .WithReference(cache)
+    .WithReference(catalog)
+    .WithReference(rabbitMq)
+    .WithReference(keycloak)
+    .WaitFor(cache)
+    .WaitFor(rabbitMq)
+    .WaitFor(keycloak);
+
+var webapp = builder
+    .AddProject<Projects.WebApp>("webapp")
+    .WithExternalHttpEndpoints()
+    .WithReference(catalog)
+    .WithReference(basket)
+    .WithReference(cache)
+    .WaitFor(catalog)
+    .WaitFor(basket);
+
+if (builder.ExecutionContext.IsRunMode)
+{
+    //Data volumes dont work on Azure Container Apps, so only add while running locally
+    postgres.WithDataVolume(); //Persist Postgres data across restarts
+    cache.WithDataVolume(); //Persist Redis data across restarts
+    keycloak.WithDataVolume(); //Persist Keycloak data across restarts
+    rabbitMq.WithDataVolume(); //Persist RabbitMQ data across restarts
+
+}
+
+builder.Build().Run();
+
+
+```
+
+### Deploy .NET Aspire App with azd commands to ACA
+- ![alt text](image-161.png)
+- ![alt text](image-160.png)
+- ![alt text](image-162.png)
+- ![alt text](image-163.png)
+- ![alt text](image-164.png)
+- ![alt text](image-165.png)
+- ![alt text](image-166.png)
+- ![alt text](image-167.png)
+- ![alt text](image-168.png)
+- ![alt text](image-170.png)
+- ![alt text](image-171.png)
+- Note the webapplication url doesnot include the internal part in the URL
+- ![alt text](image-172.png)
+- ![alt text](image-173.png)
+- ![alt text](image-174.png)
+- ![alt text](image-175.png)
+- We can view the aspire dashboard also
+- ![alt text](image-176.png)
+- We can tear down our resources with azd down command
+- ![alt text](image-177.png)
+- ![alt text](image-178.png)

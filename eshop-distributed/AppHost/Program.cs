@@ -4,8 +4,10 @@ var builder = DistributedApplication.CreateBuilder(args);
 var postgres = builder
     .AddPostgres("postgres")
     .WithPgAdmin()
-    .WithDataVolume()
+    //.WithDataVolume()
     .WithLifetime(ContainerLifetime.Persistent);
+
+
 
 var catalogDb = postgres.AddDatabase("catalogdb");
 
@@ -13,7 +15,7 @@ var catalogDb = postgres.AddDatabase("catalogdb");
 var cache = builder
     .AddRedis("cache")
     .WithRedisInsight() //Used for monitoring and visualizing Redis data
-    .WithDataVolume()
+    //.WithDataVolume()
     .WithLifetime(ContainerLifetime.Persistent);
 
 
@@ -21,12 +23,12 @@ var cache = builder
 var rabbitMq = builder
     .AddRabbitMQ("rabbitmq")
     .WithManagementPlugin() //Enables the RabbitMQ management plugin for monitoring and management
-    .WithDataVolume()
+    //.WithDataVolume()
     .WithLifetime(ContainerLifetime.Persistent);
 
 var keycloak = builder
     .AddKeycloak("keycloak", 8080)
-    .WithDataVolume() //Persist Keycloak data across restarts
+    //.WithDataVolume() //Persist Keycloak data across restarts
     .WithLifetime(ContainerLifetime.Persistent);
     //.WithAdminUser("admin", "admin") //Default admin user credentials
     //.WithRealm("master") //Default realm for Keycloak
@@ -51,5 +53,23 @@ var basket = builder
     .WaitFor(rabbitMq)
     .WaitFor(keycloak);
 
+var webapp = builder
+    .AddProject<Projects.WebApp>("webapp")
+    .WithExternalHttpEndpoints()
+    .WithReference(catalog)
+    .WithReference(basket)
+    .WithReference(cache)
+    .WaitFor(catalog)
+    .WaitFor(basket);
+
+if (builder.ExecutionContext.IsRunMode)
+{
+    //Data volumes dont work on Azure Container Apps, so only add while running locally
+    postgres.WithDataVolume(); //Persist Postgres data across restarts
+    cache.WithDataVolume(); //Persist Redis data across restarts
+    keycloak.WithDataVolume(); //Persist Keycloak data across restarts
+    rabbitMq.WithDataVolume(); //Persist RabbitMQ data across restarts
+
+}
 
 builder.Build().Run();
