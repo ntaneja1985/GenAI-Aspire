@@ -2072,3 +2072,626 @@ builder.Build().Run();
 - We can tear down our resources with azd down command
 - ![alt text](image-177.png)
 - ![alt text](image-178.png)
+
+## .Net Gen AI with Microsoft.Extensions.AI for ChatAI and Semantic Search
+- ![alt text](image-179.png)
+- ![alt text](image-180.png)
+- ![alt text](image-181.png)
+- ![alt text](image-182.png)
+- ![alt text](image-183.png)
+- ![alt text](image-184.png)
+- ![alt text](image-185.png)
+- ![alt text](image-186.png)
+- ![alt text](image-187.png)
+- ![alt text](image-188.png)
+- ![alt text](image-189.png)
+
+### Ollama and Llama Model Integrations
+- ![alt text](image-190.png)
+- We will install the following inside the AppHost Project
+- ![alt text](image-191.png)
+- Add the following code to Program.cs file in AppHost Project
+```c#
+//AI Services
+var ollama = builder
+    .AddOllama("ollama", 11434) //Run Ollama on port 11434
+    .WithDataVolume() //Persist Ollama data across restarts
+    .WithLifetime(ContainerLifetime.Persistent)
+    .WithOpenWebUI();
+
+//Add models to Ollama
+var llama = ollama.AddModel("llama3.2");
+
+//Projects
+var catalog = builder
+    .AddProject<Projects.Catalog>("catalog")
+    .WithReference(catalogDb)
+    .WithReference(rabbitMq)
+    .WithReference(llama) //Reference Ollama for AI capabilities
+    .WaitFor(catalogDb)
+    .WaitFor(rabbitMq)
+    .WaitFor(llama);
+```
+- ![alt text](image-192.png)
+- ![alt text](image-193.png)
+- ![alt text](image-194.png)
+
+### Ollama Client Integration in Catalog Microservice in .NET Aspire
+- We will install Ollama sharp inside the Catalog Microservice
+- ![alt text](image-195.png)
+
+### Using the Microsoft.Extensions.AI library
+- ![alt text](image-196.png)
+- It is an abstraction over the various AI backing services like Azure OpenAI, OpenAI or even Ollama
+- We will work with higher level interfaces like IChatClient, ChatMessage etc
+- We can even change our provider at a later stage
+- ![alt text](image-197.png)
+- ![alt text](image-198.png)
+
+### Register OllamaSharpChatClient with Microsoft.Extensions.AI
+- ![alt text](image-199.png)
+- ![alt text](image-200.png)
+- Add the following code in Program.cs file of Catalog Microservice
+```c#
+builder.AddOllamaSharpChatClient("ollama-llama3-2");
+```
+### Develop ProductAIService.cs class for Business Layer - Customer Support ChatAI
+- Add a ProductAIService class in Catalog Microservice as follows:
+```c#
+using Microsoft.Extensions.AI;
+
+namespace Catalog.Services
+{
+    public class ProductAIService
+    {
+        private readonly IChatClient _chatClient;
+
+        public ProductAIService(IChatClient chatClient)
+        {
+            _chatClient = chatClient;
+        }
+
+        public async Task<string> SupportAsync(string query)
+        {
+            var systemPrompt = """
+                    You are a helpful assistant for a product catalog.
+                    You will answer questions about products, their features, and availability.
+                    If you do not know the answer, say "I don't know".
+                    At the end of your response, include a link to the product page.
+                    If the product is not available, say "This product is not available at the moment".
+                    Always provide a friendly and helpful response.
+                    Offer one of the our products: Hiking Poles-$24.99, Hiking Boots-$89.99, Camping Tent-$199.99.
+                    """;
+
+            var chatHistory = new List<ChatMessage>
+                {
+                    new ChatMessage(ChatRole.System, systemPrompt),
+                    new ChatMessage(ChatRole.User, query)
+                };
+
+            var resultPrompt = await _chatClient.GetResponseAsync(chatHistory);
+            return resultPrompt.Messages[0].ToString();
+        }
+    }
+}
+
+
+```
+- Next register it in Program.cs as follows:
+```c#
+builder.Services.AddScoped<ProductAIService>();
+
+```
+- Now we need to add an endpoint for Support
+```c#
+  // Support AI
+  group.MapGet("/support/${query}", async (string query, ProductAIService productAIService) =>
+  {
+      if (string.IsNullOrWhiteSpace(query))
+      {
+          return Results.BadRequest("Query cannot be empty.");
+      }
+      var response = await productAIService.SupportAsync(query);
+      return Results.Ok(response);
+  })
+  .WithName("ProductSupport")
+  .Produces(StatusCodes.Status200OK);
+
+```
+
+- For testing, add the following code to Catalog.http file:
+```shell
+### Support AI
+
+GET {{Catalog_HostAddress}}/support/give-me-1-outdoor-activity
+Accept: application/json
+
+
+```
+- ![alt text](image-201.png)
+- ![alt text](image-202.png)
+
+### Blazor FrontEnd Support Page Development
+- Add the following code to CatalogApiClient
+```c#
+   public async Task<string> SupportProducts(string query)
+   {
+       var response = await httpClient.GetFromJsonAsync<string>($"/products/support/{query}");
+       return response;
+   }
+
+```
+- Add the Support Razor Page as follows:
+```c#
+@page "/support"
+
+@attribute [StreamRendering(true)]
+@rendermode InteractiveServer
+
+@inject CatalogApiClient CatalogApiClient
+
+<PageTitle>Support</PageTitle>
+
+<h1>Support</h1>
+
+<p>Ask questions about our amazing outdoor products that you can purchase.</p>
+
+<div class="form-group">
+    <label for="query" class="form-label">Type your question:</label>
+    <div class="input-group mb-3">
+        <input type="text" id="query" class="form-control" @bind="queryTerm" placeholder="Enter your query..." />
+        <button id="btnSend" class="btn btn-primary" @onclick="DoSend" type="submit">Send</button>
+    </div>
+    <hr />
+</div>
+
+@if (response != null)
+{
+    <p><em>@response</em></p>
+}
+
+@code {
+
+    private string queryTerm = default!;
+    private string response = default!;
+
+    private async Task DoSend(MouseEventArgs e)
+    {
+        response = "Loading..";
+        await Task.Delay(500);
+        response = await CatalogApiClient.SupportProducts(queryTerm);
+    }
+}
+
+```
+- Add a link to Support Page in NavMenu
+- ![alt text](image-203.png)
+- ![alt text](image-204.png)
+- ![alt text](image-205.png)
+
+### Semantic Product Search with Vector Embeddings and VectorDB
+- ![alt text](image-206.png)
+- ![alt text](image-207.png)
+- ![alt text](image-208.png)
+- ![alt text](image-209.png)
+- ![alt text](image-210.png)
+- ![alt text](image-211.png)
+- ![alt text](image-212.png)
+- ![alt text](image-213.png)
+- ![alt text](image-214.png)
+- If 2 sentences have similar meaning, their embeddings will be close in a high dimensional space
+- ![alt text](image-215.png)
+
+
+### Hosting Integration for Ollama all-minilm embeddings model
+- ![alt text](image-216.png)
+- ![alt text](image-217.png)
+- Add the following code to add the all-minilm Ollama Embeddings model
+```c#
+//Add a smaller model for embedding, useful for tasks like semantic search or text classification
+var embedding = ollama.AddModel("all-minilm");
+
+//Projects
+var catalog = builder
+    .AddProject<Projects.Catalog>("catalog")
+    .WithReference(catalogDb)
+    .WithReference(rabbitMq)
+    .WithReference(llama) //Reference Ollama for AI capabilities
+    .WithReference(embedding) //Reference embedding model for semantic tasks
+    .WaitFor(catalogDb)
+    .WaitFor(rabbitMq)
+    .WaitFor(llama)
+    .WaitFor(embedding);
+
+
+```
+
+### Client Integration Packages with SemanticKernel and Extensions.VectorData
+- ![alt text](image-218.png)
+- We need the following packages
+- ![alt text](image-219.png)
+- ![alt text](image-220.png)
+- Add these packages as well
+- ![alt text](image-221.png)
+- Verify the csproj file of Catalog Microservice as follows:
+```xml
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.3.1" />
+    <PackageReference Include="CommunityToolkit.Aspire.OllamaSharp" Version="9.6.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="9.0.7">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.VectorData.Abstractions" Version="9.7.0" />
+    <PackageReference Include="Microsoft.SemanticKernel.Connectors.InMemory" Version="1.60.0-preview" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ServiceDefaults\ServiceDefaults.csproj" />
+  </ItemGroup>
+
+</Project>
+
+
+```
+
+### Develop ProductVector Domain Entity for storing Vector Data
+- ![alt text](image-222.png)
+- We will create a ProductVector class as follows:
+```c#
+using Microsoft.Extensions.VectorData;
+using System.ComponentModel.DataAnnotations.Schema;
+
+namespace Catalog.Models;
+
+public class ProductVector
+{
+    [VectorStoreRecordKey]
+    public int Id { get; set; }
+    [VectorStoreRecordData]
+    public string Name { get; set; } = default!;
+    [VectorStoreRecordData]
+    public string Description { get; set; } = default!;
+    [VectorStoreRecordData]
+    public decimal Price { get; set; }
+    [VectorStoreRecordData]
+    public string ImageUrl { get; set; } = default!;
+
+    [NotMapped]
+    [VectorStoreRecordVector(384, DistanceFunction.CosineSimilarity)]
+    public ReadOnlyMemory<float> Vector { get; set; }
+}
+
+```
+
+### Traditional Search in ProductService.cs Business Class
+- This is how we traditionally do search using LINQ
+- This is best for power users who know the actual product names
+```c#
+ public async Task<IEnumerable<Product>> SearchProductsAsync(string query)
+ {
+     return await dbContext.Products
+         .Where(p=>p.Name.Contains(query))
+         .ToListAsync();
+ }
+
+```
+- Add this to ProductAIService.cs file:
+```c#
+ public async Task<IEnumerable<Product>> SearchProductsAsync(string query)
+ {
+     //use Embedding Generator to convert query to embedding
+     //use In-Memory Vector Store
+     //Provide Semantic Search
+ }
+
+```
+
+### "Microsoft.SemanticKernel.Connectors.InMemory
+- This package is all about in-memory vector storage for Semantic Kernel, which is perfect for fast prototyping and lightweight AI scenarios
+- Microsoft.SemanticKernel.Connectors.InMemory is a vector store connector that stores embeddings and semantic data directly in memory—no external database required.
+- Flat index for fast lookups
+- Supports multiple distance functions: CosineSimilarity, DotProductSimilarity, EuclideanDistance, etc.
+- Can store multiple vectors per record
+- Works with any comparable key and flexible data types
+- Fully supports filtering, tagging, and indexing
+- Use Cases
+- Building a local RAG (Retrieval-Augmented Generation) prototype
+- Embedding-based search in small apps
+- Temporary memory for chat agents or assistants
+
+### Register Embedding Generator and VectorStore Services in Catalog/Program.cs file
+- Our embedding model is all-minilm
+- ![alt text](image-223.png)
+- Add the following to Program.cs for Catalog Microservice
+```c#
+builder.AddOllamaSharpEmbeddingGenerator("ollama-all-minilm");
+
+//Register an in-memory vector store
+builder.Services.AddInMemoryVectorStoreRecordCollection<int, ProductVector>("products");
+```
+
+### Semantic Search Implementation
+- To do the semantic search we will follow the following steps
+- Convert all products to their vector embeddings and store in the in memory collection vector store
+- Convert the query to an embedding
+- Perform a vector search
+- Map the results to Products object and return the result
+- Here is the code of ProductAIService.cs file
+
+```c#
+using Microsoft.Extensions.AI;
+using Microsoft.Extensions.VectorData;
+
+namespace Catalog.Services
+{
+    public class ProductAIService(ProductDbContext dbContext, 
+        IChatClient _chatClient
+        , IEmbeddingGenerator<string,Embedding<float>> embeddingGenerator
+        , IVectorStoreRecordCollection<int, ProductVector> productVectorCollection)
+      
+    {
+        public async Task<string> SupportAsync(string query)
+        {
+            var systemPrompt = """
+                    You are a helpful assistant for a product catalog.
+                    You will answer questions about products, their features, and availability.
+                    If you do not know the answer, say "I don't know".
+                    At the end of your response, include a link to the product page.
+                    If the product is not available, say "This product is not available at the moment".
+                    Always provide a friendly and helpful response.
+                    Offer one of the our products: Hiking Poles-$24.99, Hiking Boots-$89.99, Camping Tent-$199.99.
+                    """;
+
+            var chatHistory = new List<ChatMessage>
+                {
+                    new ChatMessage(ChatRole.System, systemPrompt),
+                    new ChatMessage(ChatRole.User, query)
+                };
+
+            var resultPrompt = await _chatClient.GetResponseAsync(chatHistory);
+            return resultPrompt.Messages[0].ToString();
+        }
+
+        public async Task<IEnumerable<Product>> SearchProductsAsync(string query)
+        {
+
+            //Find all the products, generate the vectors for each product and store them in the vector store
+            if (!await productVectorCollection.CollectionExistsAsync())
+            {
+                await InitEmbeddingsAsync();
+            }
+
+            //Generate the vector for the query
+            var queryEmbedding = await embeddingGenerator.GenerateVectorAsync(query);
+
+
+            //Specify the vector search options
+            var vectorSearchOptions = new VectorSearchOptions
+            {
+                Top = 1,
+                VectorPropertyName = "Vector"
+            };
+
+            //Perform the vectorized search
+            var results =
+                await productVectorCollection.VectorizedSearchAsync(queryEmbedding, vectorSearchOptions);
+
+            //Map the results to Product objects
+            List<Product> products = [];
+            await foreach (var resultItem in results.Results)
+            {
+                products.Add(new Product
+                {
+                    Id = resultItem.Record.Id,
+                    Name = resultItem.Record.Name,
+                    Description = resultItem.Record.Description,
+                    Price = resultItem.Record.Price,
+                    ImageUrl = resultItem.Record.ImageUrl
+                });
+            }
+
+            return products;
+        }
+
+            //Read the products from the database, generate the embeddings and store them in the vector store
+        private async Task InitEmbeddingsAsync()
+        {
+            await productVectorCollection.CreateCollectionIfNotExistsAsync();
+
+            var products = await dbContext.Products.ToListAsync();
+            foreach (var product in products)
+            {
+                var productInfo = $"[{product.Name}] is a product that costs [{product.Price}] and is described as [{product.Description}]";
+
+                var productVector = new ProductVector
+                {
+                    Id = product.Id,
+                    Name = product.Name,
+                    Description = product.Description,
+                    Price = product.Price,
+                    ImageUrl = product.ImageUrl,
+                    Vector = await embeddingGenerator.GenerateVectorAsync(productInfo)
+                };
+
+                await productVectorCollection.UpsertAsync(productVector);
+            }
+        }
+    }
+}
+
+
+```
+### Develop Search Endpoints in ProductsEndpoint.cs for Semantic Search
+- Add the following code in ProductsEndpoint.cs file
+```c#
+
+        // Traditional Search
+        group.MapGet("search/{query}", async (string query, ProductService service) =>
+        {
+            var products = await service.SearchProductsAsync(query);
+
+            return Results.Ok(products);
+        })
+        .WithName("SearchProducts")
+        .Produces<List<Product>>(StatusCodes.Status200OK);
+
+        // AI Search
+        group.MapGet("aisearch/{query}", async (string query, ProductAIService service) =>
+        {
+            var products = await service.SearchProductsAsync(query);
+
+            return Results.Ok(products);
+        })
+        .WithName("AISearchProducts")
+        .Produces<List<Product>>(StatusCodes.Status200OK);
+
+```
+
+- Add the following to Catalog.http file
+```shell
+### Traditional Search
+
+GET {{Catalog_HostAddress}}/search/Hiking
+Accept: application/json
+
+### AI Search
+
+GET {{Catalog_HostAddress}}/aisearch/Something_for_rainy_days
+Accept: application/json
+```
+- ![alt text](image-224.png)
+- ![alt text](image-225.png)
+
+### Updating the Blazor App for Search
+- Update the CatalogApiClient.cs file as follows:
+```c#
+using Catalog.Models;
+
+namespace WebApp.ApiClients
+{
+    public class CatalogApiClient(HttpClient httpClient)
+    {
+        public async Task<List<Product>> GetProducts()
+        {
+            var response = await httpClient.GetFromJsonAsync<List<Product>>($"/products");
+            return response;
+        }
+
+        public async Task<Product> GetProductById(int id)
+        {
+            var response = await httpClient.GetFromJsonAsync<Product>($"/products/{id}");
+            return response;
+        }
+
+        public async Task<string> SupportProducts(string query)
+        {
+            var response = await httpClient.GetFromJsonAsync<string>($"/products/support/{query}");
+            return response;
+        }
+
+        public async Task<List<Product>?> SearchProducts(string query, bool aiSearch)
+        {
+            if (aiSearch)
+            {
+                return await httpClient.GetFromJsonAsync<List<Product>>($"/products/aisearch/{query}");
+            }
+            else
+            {
+                return await httpClient.GetFromJsonAsync<List<Product>>($"/products/search/{query}");
+            }
+        }
+    }
+}
+
+```
+- For the UI add the following code to Search.razor page:
+```c#
+@page "/search"
+
+@attribute [StreamRendering(true)]
+@rendermode InteractiveServer
+
+@inject CatalogApiClient CatalogApiClient
+
+<PageTitle>Search Products</PageTitle>
+
+<h1>Search Products</h1>
+
+<p>Search our amazing outdoor products that you can purchase.</p>
+
+<div class="form-group">
+    <label for="search" class="form-label">Type your question:</label>
+    <div class="input-group mb-3">
+        <input type="text" id="search" class="form-control" @bind="searchTerm" placeholder="Enter search term..." />
+        <button id="btnSearch" class="btn btn-primary" @onclick="DoSearch" type="submit">Search</button>
+    </div>
+    <div class="form-check form-switch mb-3">
+        <InputCheckbox id="aiSearchCheckBox" @bind-Value="aiSearch" />
+        <label class="form-check-label" for="aiSearch">Use Semantic Search</label>
+    </div>
+    <hr />
+</div>
+
+@if (products == null)
+{
+    <p><em>Loading...</em></p>
+}
+else if (products.Count == 0)
+{
+    <p><em>No product found.</em></p>
+}
+else
+{
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Image</th>
+                <th>Name</th>
+                <th>Description</th>
+                <th>Price</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var product in products)
+            {
+                <tr>
+                    <!-- Simulating images being hosted on a CDN -->
+                    <td><img height="80" width="80" src="https://raw.githubusercontent.com/MicrosoftDocs/mslearn-dotnet-cloudnative/main/dotnet-docker/Products/wwwroot/images/@product.ImageUrl" /></td>
+                    <td>@product.Name</td>
+                    <td>@product.Description</td>
+                    <td>@product.Price.ToString("C2")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+
+    private string searchTerm = default!;
+    private bool aiSearch = false;
+    private List<Product>? products = [];
+
+    private async Task DoSearch(MouseEventArgs e)
+    {
+        await Task.Delay(500);
+        products = await CatalogApiClient.SearchProducts(searchTerm, aiSearch);
+    }
+}
+
+```
+- ![alt text](image-226.png)
+- ![alt text](image-227.png)
+- ![alt text](image-228.png)
+- ![alt text](image-229.png)
+- ![alt text](image-230.png)
+

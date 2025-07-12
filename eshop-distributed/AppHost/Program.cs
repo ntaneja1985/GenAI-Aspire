@@ -30,17 +30,34 @@ var keycloak = builder
     .AddKeycloak("keycloak", 8080)
     //.WithDataVolume() //Persist Keycloak data across restarts
     .WithLifetime(ContainerLifetime.Persistent);
-    //.WithAdminUser("admin", "admin") //Default admin user credentials
-    //.WithRealm("master") //Default realm for Keycloak
-    //.WithRealm("catalog"); //Custom realm for the catalog service
+//.WithAdminUser("admin", "admin") //Default admin user credentials
+//.WithRealm("master") //Default realm for Keycloak
+//.WithRealm("catalog"); //Custom realm for the catalog service
+
+
+//AI Services
+var ollama = builder
+    .AddOllama("ollama", 11434) //Run Ollama on port 11434
+    .WithDataVolume() //Persist Ollama data across restarts
+    .WithLifetime(ContainerLifetime.Persistent)
+    .WithOpenWebUI();
+
+//Add models to Ollama
+var llama = ollama.AddModel("llama3.2");
+//Add a smaller model for embedding, useful for tasks like semantic search or text classification
+var embedding = ollama.AddModel("all-minilm");
 
 //Projects
 var catalog = builder
     .AddProject<Projects.Catalog>("catalog")
     .WithReference(catalogDb)
     .WithReference(rabbitMq)
+    .WithReference(llama) //Reference Ollama for AI capabilities
+    .WithReference(embedding) //Reference embedding model for semantic tasks
     .WaitFor(catalogDb)
-    .WaitFor(rabbitMq);
+    .WaitFor(rabbitMq)
+    .WaitFor(llama)
+    .WaitFor(embedding);
 
 
 var basket = builder
